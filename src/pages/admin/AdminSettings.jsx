@@ -5,10 +5,9 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000/api';
+import { supabase } from '../../lib/supabase';
 
 const AdminSettings = () => {
-  const { token } = useAuth();
   const [loading, setLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [settings, setSettings] = useState({
@@ -23,13 +22,14 @@ const AdminSettings = () => {
   const fetchSettings = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/admin/settings`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const data = await res.json();
-      if (data.success && data.data) {
-        setSettings(data.data);
-      }
+      const { data, error } = await supabase
+        .from('settings')
+        .select('*')
+        .eq('id', 1)
+        .single();
+      
+      if (error) throw error;
+      if (data) setSettings(data);
     } catch (error) {
       console.error('Fetch Settings Error:', error);
     } finally {
@@ -38,31 +38,27 @@ const AdminSettings = () => {
   };
 
   useEffect(() => {
-    if (token) fetchSettings();
-  }, [token]);
+    fetchSettings();
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setIsSaving(true);
     try {
-      const res = await fetch(`${API_BASE}/admin/settings`, {
-        method: 'PUT',
-        headers: { 
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}` 
-        },
-        body: JSON.stringify(settings)
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        alert('บันทึกการตั้งค่าสำเร็จ!');
-        if (data.data) setSettings(data.data); // Update with fresh data from server
-      } else {
-        alert(data.message || 'บันทึกการตั้งค่าไม่สำเร็จ');
-      }
+      const { data, error } = await supabase
+        .from('settings')
+        .update(settings)
+        .eq('id', 1)
+        .select()
+        .single();
+
+      if (error) throw error;
+      
+      alert('บันทึกการตั้งค่าสำเร็จ!');
+      if (data) setSettings(data);
     } catch (error) {
       console.error('Save Settings Error:', error);
-      alert(`บันทึกการตั้งค่าล้มเหลว: ${error.message}\n(โปรดตรวจสอบว่าเปิด Server แล้วหรือยัง)`);
+      alert(`บันทึกการตั้งค่าล้มเหลว: ${error.message}`);
     } finally {
       setIsSaving(false);
     }

@@ -2,13 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, useBlocker } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '../lib/supabase';
-import axios from 'axios';
 import { 
   Clock, CreditCard, Upload, CheckCircle2, 
   AlertCircle, Landmark, ExternalLink, X
 } from 'lucide-react';
-
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000/api';
 
 const Payment = () => {
   const { bookingId } = useParams();
@@ -41,18 +38,18 @@ const Payment = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
-        const config = { headers: { Authorization: `Bearer ${session.access_token}` } };
-        
         const [bookingRes, bankRes] = await Promise.all([
-          axios.get(`${API_BASE}/bookings/${bookingId}`, config),
-          axios.get(`${API_BASE}/bookings/payment-info`, config)
+          supabase.from('bookings').select('*, rooms(*)').eq('id', bookingId).single(),
+          supabase.from('settings').select('*').eq('id', 1).single()
         ]);
+
+        if (bookingRes.error) throw bookingRes.error;
+        if (bankRes.error) throw bankRes.error;
 
         setBooking(bookingRes.data);
         setBankInfo(bankRes.data);
       } catch (err) {
-        console.error(err);
+        console.error('Fetch Error:', err);
       }
     };
     fetchData();
@@ -69,35 +66,30 @@ const Payment = () => {
   };
 
   const handleConfirmPayment = async () => {
-    if (!file) return;
+    if (!file || !booking) return;
     setUploading(true);
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      
       const fileName = `${Date.now()}_${bookingId}.jpg`;
-      const { error: storageError, data: storageData } = await supabase.storage
+      const { error: storageError } = await supabase.storage
         .from('slips')
         .upload(fileName, file);
 
-      if (storageError) {
-        console.error('Storage Error:', storageError);
-        throw new Error(`Storage Error: ${storageError.message}`);
-      }
+      if (storageError) throw storageError;
 
       const { data: { publicUrl } } = supabase.storage.from('slips').getPublicUrl(fileName);
 
-      const response = await axios.post(`${API_BASE}/bookings/upload-slip`, {
-        booking_id: bookingId,
-        slip_url: publicUrl,
-        amount: booking.rooms.price
-      }, {
-        headers: { Authorization: `Bearer ${session.access_token}` }
+      // ใช้ RPC submit_payment_slip ที่สร้างไว้ใน SQL
+      const { error: rpcError } = await supabase.rpc('submit_payment_slip', {
+        p_booking_id: bookingId,
+        p_slip_url: publicUrl,
+        p_amount: booking.rooms.price
       });
+
+      if (rpcError) throw rpcError;
 
       setSuccess(true);
       setShowModal(true);
-      // Automatically redirect after 5 seconds if they don't click
       setTimeout(() => {
         navigate('/my-bookings');
       }, 5000);
@@ -110,7 +102,12 @@ const Payment = () => {
     }
   };
 
-  if (!booking || !bankInfo) return <div className="h-96 flex items-center justify-center font-bold text-slate-400">กำลังโหลด...</div>;
+  if (!booking || !bankInfo) return (
+    <div className="h-screen flex flex-col items-center justify-center gap-4 text-slate-400">
+       <div className="w-12 h-12 border-4 border-emerald-500/20 border-t-emerald-500 rounded-full animate-spin"></div>
+       <p className="font-bold italic text-sm mt-4">กำลังเตรียมข้อมูลการชำระเงิน...</p>
+    </div>
+  );
 
   return (
     <div className="max-w-4xl mx-auto pb-20 mt-10 px-4">
@@ -271,10 +268,11 @@ const Payment = () => {
                     btn.disabled = true;
                     btn.innerText = 'กำลังยกเลิก...';
                     try {
-                      const { data: { session } } = await supabase.auth.getSession();
-                      await axios.delete(`${API_BASE}/bookings/${bookingId}`, {
-                        headers: { Authorization: `Bearer ${session.access_token}` }
-                      });
+                      await supabase
+                        .from('bookings')
+                        .update({ status: 'cancelled' })
+                        .eq('id', bookingId)
+                        .eq('status', 'pending_payment');
                     } catch (err) {
                       console.error('Cancel error:', err);
                     }

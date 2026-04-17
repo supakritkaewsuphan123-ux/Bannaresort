@@ -1,11 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import axios from 'axios';
 import { motion } from 'framer-motion';
 import { MapPin, Star, Wifi, Coffee, Wind } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000/api';
+import { supabase } from '../lib/supabase';
 
 const Home = () => {
   const { user, profile } = useAuth();
@@ -16,14 +14,20 @@ const Home = () => {
   useEffect(() => {
     const fetchRooms = async () => {
       try {
-        const res = await axios.get(`${API_BASE}/rooms`);
-        setRooms(res.data);
+        const { data, error } = await supabase
+          .from('rooms')
+          .select('*')
+          .order('name');
+        
+        if (error) throw error;
+        setRooms(data || []);
       } catch (err) {
-        console.error(err);
+        console.error('Error fetching rooms:', err);
       } finally {
         setLoading(false);
       }
     };
+
     fetchRooms();
   }, []);
 

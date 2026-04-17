@@ -7,10 +7,7 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000/api';
-
 const AdminRooms = () => {
-  const { token } = useAuth();
   const [rooms, setRooms] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -35,11 +32,13 @@ const AdminRooms = () => {
   const fetchRooms = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/admin/rooms`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const data = await res.json();
-      if (data.success) setRooms(data.data);
+      const { data, error } = await supabase
+        .from('rooms')
+        .select('*')
+        .order('name');
+      
+      if (error) throw error;
+      setRooms(data || []);
     } catch (error) {
       console.error('Fetch Rooms Error:', error);
     } finally {
@@ -49,22 +48,21 @@ const AdminRooms = () => {
 
   const fetchSettings = async () => {
     try {
-      const res = await fetch(`${API_BASE}/admin/settings`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const data = await res.json();
-      if (data.success && data.data) {
-        setResortMap(data.data.resort_map_url);
-      }
+      const { data, error } = await supabase
+        .from('settings')
+        .select('resort_map_url')
+        .eq('id', 1)
+        .single();
+      
+      if (error) throw error;
+      if (data) setResortMap(data.resort_map_url);
     } catch (err) {}
   };
 
   useEffect(() => {
-    if (token) {
-      fetchRooms();
-      fetchSettings();
-    }
-  }, [token]);
+    fetchRooms();
+    fetchSettings();
+  }, []);
 
   const handleOpenModal = (room = null) => {
     if (room) {
@@ -90,15 +88,16 @@ const AdminRooms = () => {
   const handleDelete = async (id) => {
     if (!window.confirm('คุณแน่ใจหรือไม่ว่าต้องการลบห้องนี้?')) return;
     try {
-      const res = await fetch(`${API_BASE}/admin/rooms/${id}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const data = await res.json();
-      if (data.success) fetchRooms();
-      else alert(data.message);
+      const { error } = await supabase
+        .from('rooms')
+        .delete()
+        .eq('id', id);
+      
+      if (error) throw error;
+      fetchRooms();
     } catch (error) {
-      alert('การลบผิดพลาด');
+      console.error('Delete Error:', error);
+      alert('การลบผิดพลาด: ' + error.message);
     }
   };
 
@@ -107,7 +106,7 @@ const AdminRooms = () => {
     const fileName = `${Math.random()}.${fileExt}`;
     const filePath = `room-images/${fileName}`;
 
-    const { error: uploadError, data } = await supabase.storage
+    const { error: uploadError } = await supabase.storage
       .from('rooms')
       .upload(filePath, file);
 
@@ -130,32 +129,35 @@ const AdminRooms = () => {
         finalImageUrl = await handleUploadImage(selectedFile);
       }
 
-      const body = { ...formData, image_url: finalImageUrl };
-      const url = editingRoom 
-        ? `${API_BASE}/admin/rooms/${editingRoom.id}` 
-        : `${API_BASE}/admin/rooms`;
-      
-      const method = editingRoom ? 'PUT' : 'POST';
+      const body = { 
+        name: formData.name,
+        type: formData.type,
+        price: parseFloat(formData.price),
+        description: formData.description,
+        image_url: finalImageUrl,
+        x_pos: parseFloat(formData.x_pos),
+        y_pos: parseFloat(formData.y_pos)
+      };
 
-      const res = await fetch(url, {
-        method,
-        headers: { 
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}` 
-        },
-        body: JSON.stringify(body)
-      });
-
-      const data = await res.json();
-      if (data.success) {
-        setIsModalOpen(false);
-        fetchRooms();
+      let result;
+      if (editingRoom) {
+        result = await supabase
+          .from('rooms')
+          .update(body)
+          .eq('id', editingRoom.id);
       } else {
-        alert(data.message);
+        result = await supabase
+          .from('rooms')
+          .insert(body);
       }
+
+      if (result.error) throw result.error;
+
+      setIsModalOpen(false);
+      fetchRooms();
     } catch (error) {
       console.error('Submit Error:', error);
-      alert('บันทึกข้อมูลไม่สำเร็จ');
+      alert('บันทึกข้อมูลไม่สำเร็จ: ' + error.message);
     } finally {
       setIsSubmitting(false);
     }

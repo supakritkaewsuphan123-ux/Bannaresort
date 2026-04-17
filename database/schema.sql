@@ -80,30 +80,115 @@ CREATE OR REPLACE TRIGGER on_auth_user_created
     AFTER INSERT ON auth.users
     FOR EACH ROW EXECUTE PROCEDURE public.handle_new_user();
 
--- 7. Atomic Booking Function (Prevention of Race Conditions)
--- This function checks if a room is available BEFORE inserting a booking inside a transaction.
-CREATE OR REPLACE FUNCTION public.create_booking(p_user_id UUID, p_room_id UUID, p_expires_at TIMESTAMP WITH TIME ZONE)
+-- 7. Atomic Booking Function (v3)
+-- Improvements: Fetches expiry from settings inside the function, fully atomic.
+CREATE OR REPLACE FUNCTION public.create_booking_v2(p_room_id UUID)
 RETURNS UUID AS $$
 DECLARE
     v_booking_id UUID;
+    v_expiry_mins INTEGER;
+    v_user_id UUID := auth.uid();
 BEGIN
-    -- [CRITICAL] Check and Lock the room status (logic)
-    -- We look for any booking that is either 'paid' OR 'pending_payment' that hasn't expired.
+    -- 1. Verify Authentication
+    IF v_user_id IS NULL THEN
+        RAISE EXCEPTION 'ต้องเข้าสู่ระบบก่อนทำการจองครับ';
+    END IF;
+
+    -- 2. Fetch booking expiry from settings
+    SELECT booking_expiry_mins INTO v_expiry_mins FROM public.settings WHERE id = 1;
+    IF v_expiry_mins IS NULL THEN v_expiry_mins := 30; END IF;
+
+    -- 3. Atomically check and lock the room status
     IF EXISTS (
         SELECT 1 FROM public.bookings
         WHERE room_id = p_room_id
-        AND status IN ('pending_payment', 'paid')
+        AND status IN ('pending_payment', 'paid', 'awaiting_verification')
         AND expires_at > NOW()
+        FOR UPDATE
     ) THEN
-        RAISE EXCEPTION 'Room is already occupied or reserved.';
+        RAISE EXCEPTION 'ห้องนี้ไม่ว่างหรือมีการจองค้างอยู่ครับ';
     END IF;
 
-    -- Insert the new booking
+    -- 4. Create the booking
     INSERT INTO public.bookings (user_id, room_id, status, expires_at)
-    VALUES (p_user_id, p_room_id, 'pending_payment', p_expires_at)
+    VALUES (v_user_id, p_room_id, 'pending_payment', NOW() + (v_expiry_mins || ' minutes')::interval)
     RETURNING id INTO v_booking_id;
 
     RETURN v_booking_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- 7.1 Submit Payment Slip Function
+CREATE OR REPLACE FUNCTION public.submit_payment_slip(p_booking_id UUID, p_slip_url TEXT, p_amount DECIMAL)
+RETURNS VOID AS $$
+BEGIN
+    -- 1. Verify ownership and status
+    IF NOT EXISTS (
+        SELECT 1 FROM public.bookings 
+        WHERE id = p_booking_id AND user_id = auth.uid() AND expires_at > NOW()
+    ) THEN
+        RAISE EXCEPTION 'รายการจองหมดอายุหรือหาไม่เจอครับ';
+    END IF;
+
+    -- 2. Insert payment record
+    INSERT INTO public.payments (booking_id, slip_url, amount, status)
+    VALUES (p_booking_id, p_slip_url, p_amount, 'pending');
+
+    -- 3. Update booking status
+    UPDATE public.bookings 
+    SET status = 'awaiting_verification' 
+    WHERE id = p_booking_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- 7.2 Admin Approve Payment Function
+CREATE OR REPLACE FUNCTION public.admin_approve_booking(p_booking_id UUID)
+RETURNS VOID AS $$
+BEGIN
+    -- 1. Check Admin Role from DB
+    IF NOT EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin') THEN
+        RAISE EXCEPTION 'สิทธิ์ไม่เพียงพอ สงวนไว้สำหรับผู้ดูแลระบบ';
+    END IF;
+
+    -- 2. Update status
+    UPDATE public.payments SET status = 'approved' WHERE booking_id = p_booking_id;
+    UPDATE public.bookings SET status = 'paid' WHERE id = p_booking_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- 7.3 Admin Statistics function
+CREATE OR REPLACE FUNCTION public.get_admin_stats()
+RETURNS JSON AS $$
+DECLARE
+    v_stats JSON;
+BEGIN
+    -- Only admins can call this
+    IF NOT EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin') THEN
+        RAISE EXCEPTION 'สิทธิ์ไม่เพียงพอ';
+    END IF;
+
+    SELECT json_build_object(
+        'total_revenue', COALESCE((SELECT SUM(amount) FROM public.payments WHERE status = 'approved'), 0),
+        'revenue_today', COALESCE((SELECT SUM(amount) FROM public.payments WHERE status = 'approved' AND uploaded_at::date = CURRENT_DATE), 0),
+        'revenue_month', COALESCE((SELECT SUM(amount) FROM public.payments WHERE status = 'approved' AND date_trunc('month', uploaded_at) = date_trunc('month', CURRENT_DATE)), 0),
+        'total_bookings', (SELECT COUNT(*) FROM public.bookings),
+        'paid_bookings', (SELECT COUNT(*) FROM public.bookings WHERE status = 'paid'),
+        'pending_payment', (SELECT COUNT(*) FROM public.bookings WHERE status = 'pending_payment'),
+        'awaiting_verification', (SELECT COUNT(*) FROM public.bookings WHERE status = 'awaiting_verification')
+    ) INTO v_stats;
+
+    RETURN v_stats;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- 7.4 Auto-expire Cleanup function (Can be called by any auth user or cron)
+CREATE OR REPLACE FUNCTION public.check_and_cancel_expired_bookings()
+RETURNS VOID AS $$
+BEGIN
+    UPDATE public.bookings
+    SET status = 'cancelled'
+    WHERE status = 'pending_payment'
+    AND expires_at < NOW();
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
@@ -207,3 +292,33 @@ INSERT INTO public.rooms (name, type, price, image_url, description) VALUES
 ('R08', 'Deluxe', 1800.00, 'https://picsum.photos/800/600?random=8', 'Deluxe room luxury setup'),
 ('R09', 'Suite', 2500.00, 'https://picsum.photos/800/600?random=9', 'Suite room with private pool'),
 ('R10', 'Suite', 2500.00, 'https://picsum.photos/800/600?random=10', 'Presidential Suite');
+
+-- 12. Storage Buckets & Policies
+-- Note: These commands initialize buckets and secure them.
+
+-- Create Buckets
+INSERT INTO storage.buckets (id, name, public) VALUES ('rooms', 'rooms', true) ON CONFLICT (id) DO NOTHING;
+INSERT INTO storage.buckets (id, name, public) VALUES ('slips', 'slips', false) ON CONFLICT (id) DO NOTHING;
+
+-- Rooms Policy: Public Read (Anyone can see the resort rooms)
+CREATE POLICY "Public Read Rooms" ON storage.objects FOR SELECT TO public USING (bucket_id = 'rooms');
+
+-- Rooms Policy: Admin Manage (Only admins can upload/delete room photos)
+CREATE POLICY "Admin Manage Rooms" ON storage.objects FOR ALL TO authenticated USING (
+    bucket_id = 'rooms' AND (SELECT role FROM public.profiles WHERE id = auth.uid()) = 'admin'
+);
+
+-- Slips Policy: User Upload (Customers can upload their own slips)
+CREATE POLICY "User Upload Slips" ON storage.objects FOR INSERT TO authenticated WITH CHECK (
+    bucket_id = 'slips'
+);
+
+-- Slips Policy: Admin Read (Admins can see all slips for verification)
+CREATE POLICY "Admin View All Slips" ON storage.objects FOR SELECT TO authenticated USING (
+    bucket_id = 'slips' AND (SELECT role FROM public.profiles WHERE id = auth.uid()) = 'admin'
+);
+
+-- Slips Policy: Owner Read (Users can see their own uploaded slips)
+CREATE POLICY "Owner Read Slips" ON storage.objects FOR SELECT TO authenticated USING (
+    bucket_id = 'slips' AND auth.uid() = owner
+);

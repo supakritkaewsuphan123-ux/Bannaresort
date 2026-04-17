@@ -7,10 +7,9 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import { format } from 'date-fns';
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000/api';
+import { supabase } from '../../lib/supabase';
 
 const AdminUsers = () => {
-  const { token } = useAuth();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -19,13 +18,13 @@ const AdminUsers = () => {
   const fetchUsers = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/admin/users`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const data = await res.json();
-      if (data.success) {
-        setUsers(data.data);
-      }
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      setUsers(data || []);
     } catch (error) {
       console.error('Fetch Users Error:', error);
     } finally {
@@ -34,8 +33,8 @@ const AdminUsers = () => {
   };
 
   useEffect(() => {
-    if (token) fetchUsers();
-  }, [token]);
+    fetchUsers();
+  }, []);
 
   const toggleBan = async (userId, currentStatus) => {
     const actionStr = currentStatus ? 'ปลดแบน' : 'แบน';
@@ -43,22 +42,16 @@ const AdminUsers = () => {
     
     setIsProcessing(true);
     try {
-      const res = await fetch(`${API_BASE}/admin/users/${userId}/ban`, {
-        method: 'PATCH',
-        headers: { 
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}` 
-        },
-        body: JSON.stringify({ is_banned: !currentStatus })
-      });
-      const data = await res.json();
-      if (data.success) {
-        fetchUsers();
-      } else {
-        alert(data.message);
-      }
+      const { error } = await supabase
+        .from('profiles')
+        .update({ is_banned: !currentStatus })
+        .eq('id', userId);
+
+      if (error) throw error;
+      fetchUsers();
     } catch (error) {
-      alert('ดำเนินการไม่สำเร็จ');
+      console.error('Toggle Ban Error:', error);
+      alert('ดำเนินการไม่สำเร็จ: ' + error.message);
     } finally {
       setIsProcessing(false);
     }

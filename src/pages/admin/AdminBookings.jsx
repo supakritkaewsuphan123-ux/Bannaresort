@@ -7,10 +7,9 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import { format } from 'date-fns';
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000/api';
+import { supabase } from '../../lib/supabase';
 
 const AdminBookings = () => {
-  const { token } = useAuth();
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -19,13 +18,17 @@ const AdminBookings = () => {
   const fetchBookings = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/admin/bookings`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const data = await res.json();
-      if (data.success) {
-        setBookings(data.data);
-      }
+      const { data, error } = await supabase
+        .from('bookings')
+        .select(`
+          *,
+          profiles:user_id (full_name, email),
+          rooms:room_id (name, type, price)
+        `)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      setBookings(data || []);
     } catch (error) {
       console.error('Fetch Bookings Error:', error);
     } finally {
@@ -34,8 +37,8 @@ const AdminBookings = () => {
   };
 
   useEffect(() => {
-    if (token) fetchBookings();
-  }, [token]);
+    fetchBookings();
+  }, []);
 
   const getStatusBadge = (status) => {
     switch (status) {

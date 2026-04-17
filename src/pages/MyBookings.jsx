@@ -6,21 +6,25 @@ import { Calendar, Clock, CreditCard, ChevronRight, PackageCheck } from 'lucide-
 import { format } from 'date-fns';
 import { th } from 'date-fns/locale';
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000/api';
-
 const MyBookings = () => {
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const fetchBookings = async () => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const res = await axios.get(`${API_BASE}/bookings/my-bookings`, {
-        headers: { Authorization: `Bearer ${session.access_token}` }
-      });
-      setBookings(res.data);
+      const { data, error } = await supabase
+        .from('bookings')
+        .select(`
+          *,
+          rooms (*),
+          payments (*)
+        `)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      setBookings(data || []);
     } catch (err) {
-      console.error(err);
+      console.error('Fetch Bookings Error:', err);
     } finally {
       setLoading(false);
     }

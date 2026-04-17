@@ -7,12 +7,9 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, 
   Tooltip, ResponsiveContainer, Cell 
 } from 'recharts';
-import { useAuth } from '../context/AuthContext';
-
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000/api';
+import { supabase } from '../lib/supabase';
 
 const AdminDashboard = () => {
-  const { token } = useAuth();
   const [stats, setStats] = useState(null);
   const [recentBookings, setRecentBookings] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -20,25 +17,36 @@ const AdminDashboard = () => {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const settings = { headers: { Authorization: `Bearer ${token}` } };
-      
-      const statsRes = await fetch(`${API_BASE}/admin/dashboard`, settings);
-      const statsData = await statsRes.json();
-      if (statsData.success) setStats(statsData.data);
+      // 1. Get Summary Stats from SQL Function
+      const { data: statsData, error: statsError } = await supabase.rpc('get_admin_stats');
+      if (statsError) throw statsError;
+      setStats(statsData);
 
-      const bookingsRes = await fetch(`${API_BASE}/admin/bookings`, settings);
-      const bookingsData = await bookingsRes.json();
-      if (bookingsData.success) setRecentBookings(bookingsData.data.slice(0, 5));
+      // 2. Get Recent Bookings with relations
+      const { data: bookingsData, error: bookingsError } = await supabase
+        .from('bookings')
+        .select(`
+          id,
+          status,
+          created_at,
+          profiles:user_id (full_name),
+          rooms:room_id (name)
+        `)
+        .order('created_at', { ascending: false })
+        .limit(5);
+
+      if (bookingsError) throw bookingsError;
+      setRecentBookings(bookingsData);
     } catch (error) {
-      console.error('Fetch Error:', error);
+      console.error('Supabase Error:', error);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    if (token) fetchData();
-  }, [token]);
+    fetchData();
+  }, []);
 
   const cards = [
     { 

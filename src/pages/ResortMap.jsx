@@ -5,7 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { Info, CheckCircle2, Clock, Ban, Map as MapIcon, ZoomIn } from 'lucide-react';
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000/api';
+import { supabase } from '../lib/supabase';
 
 const ResortMap = () => {
   const [rooms, setRooms] = useState([]);
@@ -17,8 +17,10 @@ const ResortMap = () => {
 
   const fetchRooms = async () => {
     try {
-      const res = await axios.get(`${API_BASE}/rooms`);
-      setRooms(res.data);
+      // ดึงข้อมูลผ่าน View ที่เราสร้างไว้
+      const { data, error } = await supabase.from('room_status_view').select('*');
+      if (error) throw error;
+      setRooms(data);
     } catch (err) {
       console.error('Fetch rooms error:', err);
     } finally {
@@ -28,8 +30,9 @@ const ResortMap = () => {
 
   const fetchSettings = async () => {
     try {
-      const res = await axios.get(`${API_BASE}/resort-info`);
-      setSettings(res.data);
+      const { data, error } = await supabase.from('settings').select('*').eq('id', 1).single();
+      if (error) throw error;
+      setSettings(data);
     } catch (err) {
       console.error('Fetch settings error:', err);
     }
@@ -38,7 +41,7 @@ const ResortMap = () => {
   useEffect(() => {
     fetchRooms();
     fetchSettings();
-    const interval = setInterval(fetchRooms, 30000); // Polling every 30s
+    const interval = setInterval(fetchRooms, 30000); 
     return () => clearInterval(interval);
   }, []);
 
@@ -46,14 +49,15 @@ const ResortMap = () => {
     if (!user) { navigate('/login'); return; }
     
     try {
-      const { data: { session } } = await import('../lib/supabase').then(m => m.supabase.auth.getSession());
-      const res = await axios.post(`${API_BASE}/bookings/book`, { room_id: roomId }, {
-        headers: { Authorization: `Bearer ${session.access_token}` }
+      // เรียกใช้ RPC ตัวใหม่ที่ปลอดภัย
+      const { data: bookingId, error } = await supabase.rpc('create_booking_v2', { 
+        p_room_id: roomId 
       });
       
-      navigate(`/payment/${res.data.booking_id}`);
+      if (error) throw error;
+      navigate(`/payment/${bookingId}`);
     } catch (err) {
-      alert(err.response?.data?.error || 'Booking failed');
+      alert(err.message || 'Booking failed');
     }
   };
 

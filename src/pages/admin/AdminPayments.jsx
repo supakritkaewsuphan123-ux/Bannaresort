@@ -7,10 +7,9 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import { format } from 'date-fns';
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000/api';
+import { supabase } from '../../lib/supabase';
 
 const AdminPayments = () => {
-  const { token } = useAuth();
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedPayment, setSelectedPayment] = useState(null);
@@ -21,13 +20,22 @@ const AdminPayments = () => {
   const fetchPayments = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/admin/payments`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const data = await res.json();
-      if (data.success) {
-        setPayments(data.data);
-      }
+      const { data, error } = await supabase
+        .from('payments')
+        .select(`
+          *,
+          bookings:booking_id (
+            id,
+            status,
+            profiles:user_id (full_name, email),
+            rooms:room_id (name, price)
+          )
+        `)
+        .eq('status', 'pending')
+        .order('uploaded_at', { ascending: false });
+
+      if (error) throw error;
+      setPayments(data || []);
     } catch (error) {
       console.error('Fetch Payments Error:', error);
     } finally {
@@ -36,26 +44,24 @@ const AdminPayments = () => {
   };
 
   useEffect(() => {
-    if (token) fetchPayments();
-  }, [token]);
+    fetchPayments();
+  }, []);
 
   const handleApprove = async (bookingId) => {
     if (!window.confirm('คุณแน่ใจหรือไม่ว่าต้องการ "อนุมัติ" การชำระเงินนี้?')) return;
     setIsVerifying(true);
     try {
-      const res = await fetch(`${API_BASE}/admin/payments/${bookingId}/approve`, {
-        method: 'PATCH',
-        headers: { Authorization: `Bearer ${token}` }
+      const { error } = await supabase.rpc('admin_approve_booking', { 
+        p_booking_id: bookingId 
       });
-      const data = await res.json();
-      if (data.success) {
-        setSelectedPayment(null);
-        fetchPayments();
-      } else {
-        alert(data.message);
-      }
+      
+      if (error) throw error;
+      
+      setSelectedPayment(null);
+      fetchPayments();
     } catch (error) {
-      alert('การอนุมัติล้มเหลว');
+      console.error('Approval Error:', error);
+      alert('การอนุมัติล้มเหลว: ' + error.message);
     } finally {
       setIsVerifying(false);
     }
@@ -69,25 +75,30 @@ const AdminPayments = () => {
     
     setIsVerifying(true);
     try {
-      const res = await fetch(`${API_BASE}/admin/payments/${bookingId}/reject`, {
-        method: 'PATCH',
-        headers: { 
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}` 
-        },
-        body: JSON.stringify({ reason: rejectReason })
-      });
-      const data = await res.json();
-      if (data.success) {
-        setSelectedPayment(null);
-        setRejectReason('');
-        setShowRejectInput(false);
-        fetchPayments();
-      } else {
-        alert(data.message);
-      }
+      // 1. Update Payment status to rejected
+      const { error: pError } = await supabase
+        .from('payments')
+        .update({ status: 'rejected' })
+        .eq('booking_id', bookingId)
+        .eq('status', 'pending');
+
+      if (pError) throw pError;
+
+      // 2. Revert Booking status to pending_payment (so user can re-upload)
+      const { error: bError } = await supabase
+        .from('bookings')
+        .update({ status: 'pending_payment' })
+        .eq('id', bookingId);
+
+      if (bError) throw bError;
+
+      setSelectedPayment(null);
+      setRejectReason('');
+      setShowRejectInput(false);
+      fetchPayments();
     } catch (error) {
-      alert('การปฏิเสธล้มเหลว');
+      console.error('Rejection Error:', error);
+      alert('การปฏิเสธล้มเหลว: ' + error.message);
     } finally {
       setIsVerifying(false);
     }
