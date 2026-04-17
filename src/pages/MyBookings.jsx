@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from 'react';
-import axios from 'axios';
 import { motion } from 'framer-motion';
 import { supabase } from '../lib/supabase';
 import { Calendar, Clock, CreditCard, ChevronRight, PackageCheck } from 'lucide-react';
