@@ -15,7 +15,7 @@ const Home = () => {
     const fetchRooms = async () => {
       try {
         const { data, error } = await supabase
-          .from('rooms')
+          .from('room_status_view')
           .select('*')
           .order('name');
         
