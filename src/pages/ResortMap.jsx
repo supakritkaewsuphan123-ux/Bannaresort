@@ -124,15 +124,15 @@ const ResortMap = () => {
                         }
                       }}
                       className={`absolute w-8 h-8 -ml-4 -mt-4 rounded-full flex flex-col items-center justify-center cursor-pointer shadow-xl border-2 border-white transition-all
-                        ${room.status === 'available' ? 'bg-emerald-500 text-white shadow-emerald-200' : ''}
-                        ${room.status === 'reserved' ? 'bg-amber-500 text-white cursor-not-allowed opacity-90' : ''}
-                        ${room.status === 'booked' ? 'bg-rose-500 text-white cursor-not-allowed opacity-80' : ''}
+                        ${room.status === 'reserved' ? 'bg-amber-500 text-white cursor-not-allowed opacity-90' : 
+                          room.status === 'booked' ? 'bg-rose-500 text-white cursor-not-allowed opacity-80' : 
+                          'bg-emerald-500 text-white shadow-emerald-200'}
                       `}
                       style={{ left: `${room.x_pos || 50}%`, top: `${room.y_pos || 50}%` }}
                     >
                        <span className="text-[10px] font-black leading-none">{room.name}</span>
                        <span className="text-[8px] font-bold opacity-75 mt-0.5">
-                         {room.status === 'available' ? 'ว่าง' : (room.status === 'reserved' ? 'รอ' : 'พัก')}
+                         {room.status === 'reserved' ? 'รอ' : (room.status === 'booked' ? 'พัก' : 'ว่าง')}
                        </span>
                        
                        {/* Decorative pulsing effect */}

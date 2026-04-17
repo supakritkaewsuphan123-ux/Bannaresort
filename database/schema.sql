@@ -21,8 +21,35 @@ CREATE TABLE IF NOT EXISTS public.rooms (
     price DECIMAL(10, 2) NOT NULL,
     image_url TEXT,
     description TEXT,
+    x_pos NUMERIC,
+    y_pos NUMERIC,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
+
+-- 3.1 Create a View for real-time room status and coordinates
+CREATE OR REPLACE VIEW public.room_status_view AS
+SELECT 
+    r.id,
+    r.name,
+    r.type,
+    r.price,
+    r.image_url,
+    r.x_pos,
+    r.y_pos,
+    CASE 
+        WHEN b.status = 'paid' THEN 'booked'
+        WHEN b.status IN ('pending_payment', 'awaiting_verification') AND b.expires_at > NOW() THEN 'reserved'
+        ELSE 'available'
+    END as status
+FROM public.rooms r
+LEFT JOIN (
+    -- Get the latest active booking per room
+    SELECT DISTINCT ON (room_id) *
+    FROM public.bookings
+    WHERE status IN ('pending_payment', 'awaiting_verification', 'paid')
+    ORDER BY room_id, created_at DESC
+) b ON r.id = b.room_id 
+AND (b.status = 'paid' OR b.expires_at > NOW());
 
 -- 4. Create Bookings table (The Source of Truth for Room Status)
 CREATE TABLE IF NOT EXISTS public.bookings (
